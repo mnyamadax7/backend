@@ -37,10 +37,6 @@ function formatDuration(isoDuration) {
   return `${hours}:${mins}:${secs}`.replace(/^00:/, "");
 }
 
-app.get("/", (req, res) => {
-  res.send("Server is running!");
-});
-
 async function getVideoInfo(id) {
   const ytdlp = new YTDlpWrap();
   const jsonResult = await ytdlp.execPromise([
