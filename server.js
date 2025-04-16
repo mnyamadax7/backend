@@ -12,6 +12,7 @@ require("dotenv").config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
 const JOBS = {};
 
 const VALID_AUDIO_FORMATS = ["mp3", "aac", "m4a", "opus", "wav", "flac"];
