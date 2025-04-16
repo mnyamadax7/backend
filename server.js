@@ -11,7 +11,7 @@ const { spawn } = require("child_process");
 require("dotenv").config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 5000;
 const JOBS = {};
 
 const VALID_AUDIO_FORMATS = ["mp3", "aac", "m4a", "opus", "wav", "flac"];
