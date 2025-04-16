@@ -12,7 +12,6 @@ require("dotenv").config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const ytdlp = new YTDlpWrap();
 const JOBS = {};
 
 const VALID_AUDIO_FORMATS = ["mp3", "aac", "m4a", "opus", "wav", "flac"];
@@ -42,52 +41,23 @@ app.get("/", (req, res) => {
   res.send("Server is running!");
 });
 
-async function searchYoutubeViaAPI(query) {
-  const searchUrl = 'https://www.googleapis.com/youtube/v3/search';
-  const videosUrl = 'https://www.googleapis.com/youtube/v3/videos';
-
-  const searchResponse = await axios.get(searchUrl, {
-    params: {
-      part: 'snippet',
-      q: query,
-      maxResults: 9,
-      type: 'video',
-      key: YOUTUBE_API_KEY,
-    },
-  });
-
-  const videoIds = searchResponse.data.items.map(item => item.id.videoId).join(',');
-
-  const videosResponse = await axios.get(videosUrl, {
-    params: {
-      part: 'contentDetails,snippet',
-      id: videoIds,
-      key: YOUTUBE_API_KEY,
-    },
-  });
-
-  return videosResponse.data.items.map(video => ({
-    title: video.snippet.title,
-    videoId: video.id,
-    thumbnail: video.snippet.thumbnails.medium.url,
-    duration: formatDuration(video.contentDetails.duration)
-  }));
-}
-
 async function getVideoInfo(id) {
-  const raw = await runYtDlp(`yt-dlp -f bestaudio+bestvideo --dump-json https://www.youtube.com/watch?v=${id}`);
-  const info = JSON.parse(raw);
+  const ytdlp = new YTDlpWrap();
+  const jsonResult = await ytdlp.execPromise([
+    `https://www.youtube.com/watch?v=${id}`,
+    "--dump-json",
+  ]);
+  const info = JSON.parse(jsonResult);
   const videoFormats = [];
   const audioFormats = [];
 
-  info.formats.forEach(format => {
+  info.formats.forEach((format) => {
     const entry = {
       quality: format.format_note || format.quality_label || format.audio_quality,
       download_url: `/api/download?url=${encodeURIComponent(format.url)}&title=${encodeURIComponent(info.title)}`,
     };
-
-    if (format.vcodec !== 'none' && format.acodec !== 'none') videoFormats.push(entry);
-    else if (format.vcodec === 'none' && format.acodec !== 'none') audioFormats.push(entry);
+    if (format.vcodec !== "none" && format.acodec !== "none") videoFormats.push(entry);
+    else if (format.vcodec === "none" && format.acodec !== "none") audioFormats.push(entry);
   });
 
   return {
@@ -97,37 +67,12 @@ async function getVideoInfo(id) {
     audioFormats,
   };
 }
+
 app.get("/api/video/:id", async (req, res) => {
-  const videoId = req.params.id;
-  const url = `https://www.youtube.com/watch?v=${videoId}`;
-
+  const { id } = req.params;
   try {
-    const jsonResult = await ytdlp.execPromise([url, "--dump-json"]);
-    const info = JSON.parse(jsonResult);
-
-    const videoFormats = [];
-    const audioFormats = [];
-
-    info.formats.forEach((format) => {
-      const entry = {
-        quality: format.format_note || format.quality_label || format.audio_quality,
-        download_url: `/api/download?url=${encodeURIComponent(format.url)}&title=${encodeURIComponent(info.title)}`,
-      };
-
-      if (format.vcodec !== "none" && format.acodec !== "none") {
-        videoFormats.push(entry);
-      } else if (format.vcodec === "none" && format.acodec !== "none") {
-        audioFormats.push(entry);
-      }
-    });
-
-    res.json({
-      id: uuidv4(),
-      title: info.title,
-      thumbnail: info.thumbnail,
-      videoFormats,
-      audioFormats,
-    });
+    const info = await getVideoInfo(id);
+    res.json({ id: uuidv4(), ...info });
   } catch (error) {
     res.status(500).json({ error: "yt-dlp failed", details: error.message });
   }
@@ -157,14 +102,8 @@ app.post("/api/convert/start", async (req, res) => {
 
   JOBS[jobId] = { progress: 0, path: outFile, done: false, ext: outputExt, name: filename };
 
-  setTimeout(() => {
-    if (fs.existsSync(outFile)) fs.unlinkSync(outFile);
-    if (fs.existsSync(tempInput)) fs.unlinkSync(tempInput);
-    delete JOBS[jobId];
-    console.log(`Expired and cleaned up job ${jobId}`);
-  }, 10 * 60 * 1000);
-
   try {
+    const ytdlp = new YTDlpWrap();
     await ytdlp.execPromise([
       `https://www.youtube.com/watch?v=${id}`,
       "-f",
@@ -180,6 +119,11 @@ app.post("/api/convert/start", async (req, res) => {
       : ["-i", tempInput, "-f", "mp4", "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-progress", "pipe:2", outFile];
 
     const ffmpeg = spawn("ffmpeg", ffmpegArgs);
+
+    ffmpeg.on("error", (err) => {
+      console.error("ffmpeg spawn error:", err);
+      return res.status(500).json({ error: "FFmpeg execution failed" });
+    });
 
     ffmpeg.stderr.on("data", (data) => {
       console.error("ffmpeg error:", data.toString());
@@ -205,6 +149,13 @@ app.post("/api/convert/start", async (req, res) => {
       fs.unlink(tempInput, () => {});
     });
 
+    setTimeout(() => {
+      if (fs.existsSync(outFile)) fs.unlinkSync(outFile);
+      if (fs.existsSync(tempInput)) fs.unlinkSync(tempInput);
+      delete JOBS[jobId];
+      console.log(`Expired and cleaned up job ${jobId}`);
+    }, 10 * 60 * 1000);
+
     res.json({ jobId });
   } catch (err) {
     console.error("Conversion error:", err);
@@ -223,6 +174,7 @@ app.get("/api/convert/download", (req, res) => {
 
   res.setHeader("Content-Disposition", `attachment; filename=\"${filename}\"`);
   res.setHeader("Content-Type", "application/octet-stream");
+  res.setHeader("Content-Encoding", "gzip");
 
   const stream = fs.createReadStream(job.path);
   stream.on("error", (err) => {
@@ -245,6 +197,7 @@ app.get("/api/progress", (req, res) => {
   console.log("Progress response:", payload);
   res.json(payload);
 });
+
 app.get('/api/search', async (req, res) => {
   const { q } = req.query;
   if (!q) return res.status(400).json({ error: 'Missing query parameter' });
