@@ -37,6 +37,38 @@ function formatDuration(isoDuration) {
   return `${hours}:${mins}:${secs}`.replace(/^00:/, "");
 }
 
+async function searchYoutubeViaAPI(query) {
+  const searchUrl = 'https://www.googleapis.com/youtube/v3/search';
+  const videosUrl = 'https://www.googleapis.com/youtube/v3/videos';
+
+  const searchResponse = await axios.get(searchUrl, {
+    params: {
+      part: 'snippet',
+      q: query,
+      maxResults: 9,
+      type: 'video',
+      key: YOUTUBE_API_KEY,
+    },
+  });
+
+  const videoIds = searchResponse.data.items.map(item => item.id.videoId).join(',');
+
+  const videosResponse = await axios.get(videosUrl, {
+    params: {
+      part: 'contentDetails,snippet',
+      id: videoIds,
+      key: YOUTUBE_API_KEY,
+    },
+  });
+
+  return videosResponse.data.items.map(video => ({
+    title: video.snippet.title,
+    videoId: video.id,
+    thumbnail: video.snippet.thumbnails.medium.url,
+    duration: formatDuration(video.contentDetails.duration)
+  }));
+}
+
 async function getVideoInfo(id) {
   const ytdlp = new YTDlpWrap();
   const jsonResult = await ytdlp.execPromise([
